@@ -106,47 +106,59 @@ def verify_timetable(
     include_weekly_grid: bool = Query(default=True),
 ) -> dict[str, Any]:
     ensure_library_ready()
+    try:
+        parsed_date = parse_iso_date(target_date)
+        week_num = infer_week_num(parsed_date)
+        candidate = select_school_candidate(
+            school_name=school_name,
+            region_name=region_name,
+            school_code=school_code,
+        )
+        timetable_obj = load_timetable(candidate.school_name, week_num)
 
-    parsed_date = parse_iso_date(target_date)
-    week_num = infer_week_num(parsed_date)
-    candidate = select_school_candidate(
-        school_name=school_name,
-        region_name=region_name,
-        school_code=school_code,
-    )
-    timetable_obj = load_timetable(candidate.school_name, week_num)
+        daily_subjects, weekly_grid = extract_grade_class_schedule(
+            timetable_data=getattr(timetable_obj, "timetable", None),
+            grade=grade,
+            class_num=class_num,
+            target_date=parsed_date,
+        )
 
-    daily_subjects, weekly_grid = extract_grade_class_schedule(
-        timetable_data=getattr(timetable_obj, "timetable", None),
-        grade=grade,
-        class_num=class_num,
-        target_date=parsed_date,
-    )
+        homeroom_name = None
+        if hasattr(timetable_obj, "homeroom"):
+            try:
+                homeroom_name = make_json_safe(timetable_obj.homeroom(grade, class_num))
+            except Exception:
+                homeroom_name = None
 
-    homeroom_name = None
-    if hasattr(timetable_obj, "homeroom"):
-        try:
-            homeroom_name = timetable_obj.homeroom(grade, class_num)
-        except Exception:
-            homeroom_name = None
-
-    return {
-        "school": asdict(candidate),
-        "request": {
-            "target_date": parsed_date.isoformat(),
-            "weekday": weekday_payload(parsed_date),
-            "grade": grade,
-            "class_num": class_num,
-            "week_num": week_num,
-        },
-        "daily_subjects": daily_subjects,
-        "weekly_grid": weekly_grid if include_weekly_grid else None,
-        "homeroom": homeroom_name,
-        "raw_summary": {
-            "daily_count": len(daily_subjects),
-            "weekly_day_count": len(weekly_grid),
-        },
-    }
+        return {
+            "school": asdict(candidate),
+            "request": {
+                "target_date": parsed_date.isoformat(),
+                "weekday": weekday_payload(parsed_date),
+                "grade": grade,
+                "class_num": class_num,
+                "week_num": week_num,
+            },
+            "daily_subjects": daily_subjects,
+            "weekly_grid": weekly_grid if include_weekly_grid else None,
+            "homeroom": homeroom_name,
+            "raw_summary": {
+                "daily_count": len(daily_subjects),
+                "weekly_day_count": len(weekly_grid),
+                "timetable_type": type(getattr(timetable_obj, "timetable", None)).__name__,
+            },
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "message": "unexpected timetable verification error",
+                "error_type": type(exc).__name__,
+                "error": str(exc),
+            },
+        ) from exc
 
 
 def ensure_library_ready() -> None:
@@ -245,10 +257,10 @@ def normalize_school_candidate(item: Any) -> SchoolCandidate:
             region_name=str(parts[1]) if len(parts) > 1 else None,
             school_code=str(parts[0]) if len(parts) > 0 else None,
             region_code=str(parts[3]) if len(parts) > 3 else None,
-            raw=parts,
+            raw=make_json_safe(parts),
         )
 
-    return SchoolCandidate(school_name=str(item), raw=item)
+    return SchoolCandidate(school_name=str(item), raw=make_json_safe(item))
 
 
 def string_or_none(value: Any) -> str | None:
@@ -398,7 +410,7 @@ def normalize_week_schedule(class_bucket: Any) -> list[dict[str, Any]]:
                         "period": period_position,
                         "subject": subject,
                         "is_empty": subject == "",
-                        "raw": raw_subject,
+                        "raw": make_json_safe(raw_subject),
                     }
                 )
         else:
@@ -408,7 +420,7 @@ def normalize_week_schedule(class_bucket: Any) -> list[dict[str, Any]]:
                     "period": 1,
                     "subject": subject,
                     "is_empty": subject == "",
-                    "raw": day_bucket,
+                    "raw": make_json_safe(day_bucket),
                 }
             )
 
@@ -427,3 +439,18 @@ def normalize_subject(value: Any) -> str:
     if value is None:
         return ""
     return str(value).strip()
+
+
+def make_json_safe(value: Any) -> Any:
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, bytes):
+        try:
+            return value.decode("utf-8")
+        except Exception:
+            return value.decode("utf-8", errors="replace")
+    if isinstance(value, dict):
+        return {str(key): make_json_safe(val) for key, val in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [make_json_safe(item) for item in value]
+    return str(value)
