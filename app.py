@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 from datetime import date, datetime, timedelta
+import re
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -16,6 +17,8 @@ except ImportError:  # pragma: no cover - dependency is installed in deployment
 
 APP_TIMEZONE = ZoneInfo("Asia/Seoul")
 KOREAN_WEEKDAYS = ["월", "화", "수", "목", "금", "토", "일"]
+PERIOD_PREFIX_RE = re.compile(r"^\s*(\d+)교시:\s*(.*)$")
+TEACHER_RE = re.compile(r"\(([^()]*)\)")
 
 
 @dataclass
@@ -404,25 +407,9 @@ def normalize_week_schedule(class_bucket: Any) -> list[dict[str, Any]]:
         periods: list[dict[str, Any]] = []
         if isinstance(day_bucket, (list, tuple)):
             for period_position, raw_subject in enumerate(day_bucket, start=1):
-                subject = normalize_subject(raw_subject)
-                periods.append(
-                    {
-                        "period": period_position,
-                        "subject": subject,
-                        "is_empty": subject == "",
-                        "raw": make_json_safe(raw_subject),
-                    }
-                )
+                periods.append(parse_period_entry(raw_subject, period_position))
         else:
-            subject = normalize_subject(day_bucket)
-            periods.append(
-                {
-                    "period": 1,
-                    "subject": subject,
-                    "is_empty": subject == "",
-                    "raw": make_json_safe(day_bucket),
-                }
-            )
+            periods.append(parse_period_entry(day_bucket, 1))
 
         weekly_grid.append(
             {
@@ -439,6 +426,54 @@ def normalize_subject(value: Any) -> str:
     if value is None:
         return ""
     return str(value).strip()
+
+
+def parse_period_entry(raw_value: Any, fallback_period: int) -> dict[str, Any]:
+    raw_text = normalize_subject(raw_value)
+    parsed_period = fallback_period
+    body = raw_text
+
+    match = PERIOD_PREFIX_RE.match(raw_text)
+    if match:
+        parsed_period = int(match.group(1))
+        body = match.group(2).strip()
+
+    is_substitution = body.endswith("(대체)") or body.endswith(" (대체)")
+    if is_substitution:
+        body = body[: body.rfind("(대체)")].strip()
+
+    teacher_name = None
+    teacher_matches = TEACHER_RE.findall(body)
+    if teacher_matches:
+        teacher_name = teacher_matches[-1].strip() or None
+        body = TEACHER_RE.sub("", body).strip()
+
+    subject_name = normalize_placeholder_subject(body)
+    is_placeholder = subject_name == ""
+
+    return {
+        "period": parsed_period,
+        "display_text": raw_text,
+        "subject": subject_name,
+        "teacher": teacher_name,
+        "is_substitution": is_substitution,
+        "is_placeholder": is_placeholder,
+        "raw": make_json_safe(raw_value),
+    }
+
+
+def normalize_placeholder_subject(value: str) -> str:
+    cleaned = value.strip()
+    if cleaned in {"", "()"}:
+        return ""
+
+    # pycomcigan sometimes returns placeholders like "(홍길*)" or empty parens.
+    if cleaned.startswith("(") and cleaned.endswith(")"):
+        inner = cleaned[1:-1].strip()
+        if inner == "" or "*" in inner:
+            return ""
+
+    return cleaned
 
 
 def make_json_safe(value: Any) -> Any:
