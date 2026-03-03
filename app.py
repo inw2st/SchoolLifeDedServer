@@ -164,6 +164,52 @@ def verify_timetable(
         ) from exc
 
 
+@app.get("/timetable/debug")
+def debug_timetable(
+    school_name: str = Query(..., min_length=1),
+    grade: int = Query(..., ge=1, le=12),
+    class_num: int = Query(..., ge=1, le=50),
+    target_date: str = Query(..., description="YYYY-MM-DD"),
+    region_name: str | None = Query(default=None),
+    school_code: str | None = Query(default=None),
+) -> dict[str, Any]:
+    ensure_library_ready()
+
+    parsed_date = parse_iso_date(target_date)
+    week_num = infer_week_num(parsed_date)
+    candidate = select_school_candidate(
+        school_name=school_name,
+        region_name=region_name,
+        school_code=school_code,
+    )
+    timetable_obj = load_timetable(candidate.school_name, week_num)
+    timetable_data = getattr(timetable_obj, "timetable", None)
+
+    grade_bucket = safe_index(timetable_data, grade)
+    class_bucket = safe_index(grade_bucket, class_num)
+
+    return {
+        "school": asdict(candidate),
+        "request": {
+            "target_date": parsed_date.isoformat(),
+            "grade": grade,
+            "class_num": class_num,
+            "week_num": week_num,
+        },
+        "time_table_object_type": type(timetable_obj).__name__,
+        "time_table_object_dir": sorted(
+            name for name in dir(timetable_obj) if not name.startswith("__")
+        ),
+        "time_table_object_dict": make_json_safe(getattr(timetable_obj, "__dict__", {})),
+        "timetable_type": type(timetable_data).__name__,
+        "grade_bucket_type": type(grade_bucket).__name__ if grade_bucket is not None else None,
+        "class_bucket_type": type(class_bucket).__name__ if class_bucket is not None else None,
+        "raw_class_bucket": make_json_safe(class_bucket),
+        "normalized_weekly_grid": normalize_week_schedule(class_bucket) if class_bucket is not None else None,
+        "string_repr": str(timetable_obj),
+    }
+
+
 def ensure_library_ready() -> None:
     if TimeTable is None or get_school_code is None:
         raise HTTPException(
