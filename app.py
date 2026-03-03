@@ -241,9 +241,9 @@ def normalize_school_candidate(item: Any) -> SchoolCandidate:
     if isinstance(item, (list, tuple)):
         parts = list(item)
         return SchoolCandidate(
-            school_name=str(parts[0]) if len(parts) > 0 else "",
+            school_name=str(parts[2]) if len(parts) > 2 else "",
             region_name=str(parts[1]) if len(parts) > 1 else None,
-            school_code=str(parts[2]) if len(parts) > 2 else None,
+            school_code=str(parts[0]) if len(parts) > 0 else None,
             region_code=str(parts[3]) if len(parts) > 3 else None,
             raw=parts,
         )
