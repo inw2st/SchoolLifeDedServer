@@ -398,9 +398,10 @@ def normalize_week_schedule(class_bucket: Any) -> list[dict[str, Any]]:
             detail=f"unexpected class timetable shape: {type(class_bucket).__name__}",
         )
 
+    normalized_days = normalize_day_buckets(class_bucket)
     weekly_grid: list[dict[str, Any]] = []
 
-    for weekday_position, day_bucket in enumerate(class_bucket):
+    for weekday_position, day_bucket in enumerate(normalized_days):
         if weekday_position >= len(KOREAN_WEEKDAYS):
             break
 
@@ -420,6 +421,25 @@ def normalize_week_schedule(class_bucket: Any) -> list[dict[str, Any]]:
         )
 
     return weekly_grid
+
+
+def normalize_day_buckets(class_bucket: Any) -> list[Any]:
+    days = list(class_bucket)
+
+    # Some pycomcigan schools return a leading dummy slot, then Monday-Friday.
+    # Example: [dummy, mon, tue, wed, thu, fri]
+    if len(days) == 6 and is_effectively_empty_day(days[0]):
+        return days[1:]
+
+    return days
+
+
+def is_effectively_empty_day(day_bucket: Any) -> bool:
+    if isinstance(day_bucket, (list, tuple)):
+        if not day_bucket:
+            return True
+        return all(parse_period_entry(item, idx + 1)["is_placeholder"] for idx, item in enumerate(day_bucket))
+    return parse_period_entry(day_bucket, 1)["is_placeholder"]
 
 
 def normalize_subject(value: Any) -> str:
